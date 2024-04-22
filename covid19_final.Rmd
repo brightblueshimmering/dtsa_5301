@@ -1,0 +1,371 @@
+---
+title: "Covid-19 Analysis"
+author: "Tristan Osborn"
+date: "2024-04-19"
+output: html_document
+---
+
+### Libraries used:
+#### library(tidyverse)
+#### library(dplyr)
+#### library(stringr)
+#### library(zoo)
+
+## Data
+
+#### The data used for this project is Covid-19 data aggregated by John Hopkins University. The data includes aggregated cases and deaths by day for countries/regions around the world from 2020 to 2023. Source: https://github.com/CSSEGISandData/COVID-19 
+
+#### The point of this analysis is to see how Covid-19 affected different countries as well as looking potential trends for new cases and new deaths.
+
+## Potential Bias
+
+#### Regarding Covid-19, potential sources of bias for this dataset can come from country region of a country. Bias can also come from personal beliefs, such as political beliefs, favoritism of certain countries or regions, etc. To avoid bias in this project, we will look at stats regarding totals (cases & deaths). The countries chosen for the model(which looks at the relationship between cases and deaths) were chosen solely because they reported the most deaths therefore presenting the model with more data.
+
+
+```{r setup}
+#libraries
+library(tidyverse)
+library(dplyr)
+library(stringr)
+library(zoo)
+
+url_in <- c(
+  "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv",
+  "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv",
+  "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv",
+  "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv",
+  "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv")
+#loading data
+cumulative_us_cases <- read_csv(url_in[1])
+cumulative_us_deaths <- read_csv(url_in[2])
+cumulative_global_cases <- read_csv(url_in[3])
+cumulative_global_deaths <- read_csv(url_in[4])
+uid_fips <- read_csv(url_in[5])
+```
+
+```{r country populations}
+#removing "" from combined_key to get only country pop
+uid_fips <- uid_fips %>%
+  mutate(Combined_Key = str_replace_all(Combined_Key, '"', ''))
+#dropping rows where Country_Region is not equal to Combined_Key
+uid_fips <- uid_fips %>%
+  filter(Country_Region == Combined_Key)
+#getting pop by country
+country_population <- sum(uid_fips$Population, na.rm = TRUE)
+
+#grouping by country
+country_population_by_region <- uid_fips %>%
+  group_by(Country_Region) %>%
+  summarize(Total_Population = sum(Population, na.rm = TRUE))
+
+#renaming table and country column
+populations <- country_population_by_region %>%
+  rename("Country" = Country_Region)
+```
+
+```{r cumulative country data}
+#cumulative case data
+cum_country_cases <- cumulative_global_cases %>%
+  select(-"Province/State", -Lat, -Long) %>%
+  pivot_longer(cols = -"Country/Region", names_to = 'date', values_to = 'cases') %>%
+  mutate(date = as.Date(date, format = "%m/%d/%y")) %>%
+  group_by(`Country/Region`, date) %>%
+  summarize(total_cases = sum(cases), .groups = 'drop') 
+
+#cumulative death data
+cum_country_deaths <- cumulative_global_deaths %>%
+  select(-"Province/State", -Lat, -Long) %>%
+  pivot_longer(cols = -"Country/Region", names_to = 'date', values_to = 'deaths') %>%
+  mutate(date = as.Date(date, format = "%m/%d/%y")) %>%
+  group_by(`Country/Region`, date) %>%
+  summarize(total_deaths = sum(deaths), .groups = 'drop')
+```
+
+```{r summing data}
+#total cases
+total_cases <- cum_country_cases %>% group_by(`Country/Region`) %>%
+  summarize(Total_Cases = max(total_cases), .groups = 'drop')
+#total deaths
+total_deaths <- cum_country_deaths %>%
+  group_by(`Country/Region`) %>% summarize(Total_Deaths = max(total_deaths), .groups = 'drop')
+#merging deaths
+totals <- total_cases %>%  left_join(total_deaths, by = "Country/Region")
+#merging populations
+totals <- totals %>% rename("Country" = 'Country/Region') 
+totals <- totals %>% left_join(populations, by = "Country")
+```
+
+```{r processing totals}
+
+totals <- totals %>%
+  mutate(Total_Population = ifelse(Total_Population < Total_Cases, Total_Cases, Total_Population))
+
+totals <- totals %>% mutate(Total_Cases = ifelse(Total_Cases < Total_Deaths, Total_Deaths, Total_Cases))
+
+totals <- totals %>%
+  mutate(cfr = ifelse(Total_Cases > 0, (Total_Deaths / Total_Cases) * 100, 0),
+    Incident_Rate_per_100k = ifelse(Total_Population > 0, (Total_Cases / Total_Population) *100000, 0),
+    Mortality_Rate_per_100k = ifelse(Total_Population > 0, (Total_Deaths / Total_Population) * 100000, 0))
+
+#these are either non-countries or arent reported properly 
+totals <- totals %>%
+  filter(!(`Country` %in% c("Summer Olympics 2020", "Winter Olympics 2022", "MS Zaandam", "Diamond Princess","Korea, North", "Antartica")))
+```
+
+
+```{r top 25}
+#getting top 25 countries for several categories
+top_cases <- totals %>% top_n(25, Total_Cases) %>% arrange(desc(Total_Cases))
+top_deaths <- totals %>% top_n(25, Total_Deaths) %>% arrange(desc(Total_Deaths))
+top_cfr <- totals %>% top_n(25, cfr) %>% arrange(desc(cfr))
+top_mortality <- totals %>% top_n(25, Mortality_Rate_per_100k) %>% arrange(desc(Mortality_Rate_per_100k))
+top_incidents <- totals %>% top_n(25, Incident_Rate_per_100k) %>% arrange(desc(Incident_Rate_per_100k))
+```
+
+## Top 25 Countries by Confirmed Cases & Deaths
+
+```{r countries by total cases}
+#plotting 25 countries by total cases
+ggplot(top_cases, aes(x = reorder(`Country`, -Total_Cases), y = Total_Cases)) +
+  geom_col(fill = "coral") +
+  labs(title = "Top 25 Countries by Confirmed Cases", x = "Country", y = "Count of Cases") + theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r countries by total deaths}
+#plotting 25 countries by total deaths
+ggplot(top_deaths, aes(x = reorder(`Country`, -Total_Deaths), y = Total_Deaths)) +
+  geom_col(fill = "lightblue") +
+  labs(title = "Top 25 Countries by Deaths", x = "Country", y = "Count of Deaths") + theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+#### Here we can see the US has the most overall reported cases and deaths related to COVID-19. We can see that each of top few countries have a larger population, which of course has a factor with how many overall cases and deaths are reported. Amother thing to consider is how often and transparent each country is in reporting its caes and deaths.
+
+## Top 25 Countries by Cases & Deaths in relation to population
+
+```{r top countries cases/pop}
+#plotting cases per 100k
+ggplot(top_incidents, aes(x = reorder(`Country`, -Incident_Rate_per_100k), y = Incident_Rate_per_100k)) +
+  geom_col(fill = "forestgreen") + labs(title = "Top 25 Countries by Cases per 100,000",
+       x = "Country", y = "Cases/100k") + theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+```{r top countries deaths/pop}
+#plot death per 100k
+ggplot(top_mortality, aes(x = reorder(`Country`, -Mortality_Rate_per_100k), y = Mortality_Rate_per_100k)) +
+  geom_col(fill = "firebrick") + labs(title = "Top 25 Countries by Deaths per 100,000",
+       x = "Country", y = "Deaths/100k") + theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+#### Here we can see that Peru has the highest deaths compared to its population. We can see that see that these are small to midsize countries which may have a smaller infrasctucture, may have little prevention methods, or may have less advanced medical practices.  
+
+## Top 25 Countries by Case to Fatality Ratio
+
+```{r top countries cfr}
+# cfr plot
+ggplot(top_cfr, aes(x = reorder(`Country`, -cfr), y = cfr)) +
+  geom_col(fill = "steelblue") +
+  labs(title = "Top 25 Countries by Case Fatality Rate (CFR)",
+       x = "Country", y = "CFR (%)") + theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+#### CFR is essentially case to death ratio. A higher ratio means that comfirmed cases may not have as much access to proper medical treatment. Here we can see that Yemen leads in CFR. We can see that similar to deaths/population, some of these countries are smaller and may have less effective ways to treat cases back to health.
+
+```{r country daily cases}
+country_daily_cases <- cum_country_cases %>%
+  arrange(`Country/Region`, date) %>%
+  group_by(`Country/Region`) %>%
+  mutate(new_cases = c(total_cases[1], diff(total_cases))) %>%
+  ungroup() %>%
+  select(country = `Country/Region`, date, total_cases, new_cases)
+
+#daily deaths, grouping by country
+country_daily_deaths <- cum_country_deaths %>%
+  arrange(`Country/Region`, date) %>%
+  group_by(`Country/Region`) %>%
+  mutate(new_deaths = c(total_deaths[1], diff(total_deaths))) %>%
+  ungroup() %>%
+  select(country = `Country/Region`, date, total_deaths, new_deaths)
+
+#merging
+new <- merge(country_daily_cases, country_daily_deaths, by = c("country", "date"))
+```
+
+## New cases and deaths
+
+#### So far we have been looking at totals. The data is cumulative, meaning that each day is the running total of cases and deaths. Here we are looking at new daily cases and deaths trends. I have chosen the top 3 countries (US, Brazil, India) based on the highest reported deaths. 
+
+```{r daily cases}
+countries_of_interest <- c("US", "India", "Brazil")
+selected_countries_data <- subset(new, country %in% countries_of_interest)
+
+#plotting daily cases
+ggplot(selected_countries_data, aes(x = date)) +
+  geom_point(aes(y = new_cases, color = country), size = 1) +
+  scale_y_continuous(name = "Count", labels = scales::comma) +
+  labs(title = "Trends in COVID-19 Cases",
+       subtitle = "US, India, & Brazil",
+       color = "Country") +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+ 
+#### We can see that there are identifiable peaks in reported cases for each country. We can see that there are clear peaks and valleys. We can see that there are several outliers/points of interest. There are high numbers of new reported cases for days around Jan 1 2022 in the US. These may be days where the infection spread rapidly or these could be accumulated previous cases that were just recently reported.
+
+
+```{r daily deaths}
+# plotting daily deaths
+ggplot(selected_countries_data, aes(x = date)) +
+  geom_point(aes(y = new_deaths, color = country), size = 1) +
+  scale_y_continuous(name = "Count", labels = scales::comma) +
+  labs(title = "Trends in COVID-19 Deaths",
+       subtitle = "US, India, & Brazil",
+       color = "Country") +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+#### Here we can see that similar to cases, there are similar peaks between each of the three countries in regards to deaths.
+There appears to be an outlier/point of interest reported by India around mid-2022.
+
+
+```{r rolling averages}
+#calc weekly avgs
+calculate_rolling_mean <- function(x) {
+  rollmean(x, 7, fill = NA, align = "right", partial = TRUE)}
+
+selected_countries_data <- selected_countries_data %>%
+  arrange(country, date) %>%
+  group_by(country) %>%
+  mutate(weekly_avg_cases = calculate_rolling_mean(new_cases),
+    weekly_avg_deaths = calculate_rolling_mean(new_deaths)
+  ) %>% ungroup()
+
+#removing na's
+selected_countries_data <- selected_countries_data %>%
+  filter(!is.na(weekly_avg_cases) & !is.na(weekly_avg_deaths))
+
+#adding to df
+weekly_avgs <- selected_countries_data %>%
+  select(date, country, weekly_avg_cases, weekly_avg_deaths)
+```
+
+#### Below are the weekly moving averages for cases and deaths, This was performed to show the trends more clearly:
+
+```{r weekly avgs cases}
+#plotting weekly moving avgs - cases
+ggplot(selected_countries_data, aes(x = date, y = weekly_avg_cases, color = country)) +
+  geom_line() + labs(title = "Weekly Moving Average of New Cases",
+       x = "Date", y = "Weekly Average of New Cases", color = "Country") +
+  theme_minimal() + theme(legend.position = "top")
+```
+
+```{r weekly avgs deaths}
+#plotting weekly moving avgs - deaths
+ggplot(selected_countries_data, aes(x = date, y = weekly_avg_deaths, color = country)) +
+  geom_line() + labs(title = "Weekly Moving Average of New Deaths",
+       x = "Date", y = "Weekly Average of New Deaths", color = "Country") +
+  theme_minimal() + theme(legend.position = "top")
+```
+
+## Model
+
+#### We will perform a simple linear model for the US, India, and Brazil to see how it considers the relationship between cases and deaths. 
+
+```{r model data}
+#dataframes for each country
+us <- c("US")
+us_data <- subset(new, country %in% us)
+us_new_cases <- data.frame(
+  date = us_data$date,
+  new_cases = us_data$new_cases,
+  new_deaths = us_data$new_deaths
+)
+india <- c("India")
+india_data <- subset(new, country %in% india)
+india_new_cases <- data.frame(
+  date = india_data$date,
+  new_cases = india_data$new_cases,
+  new_deaths = india_data$new_deaths)
+
+brazil <- c("Brazil")
+brazil_data <- subset(new, country %in% brazil)
+brazil_new_cases <- data.frame(
+  date = brazil_data$date,
+  new_cases = brazil_data$new_cases,
+  new_deaths = brazil_data$new_deaths)
+```
+
+```{r linear models}
+#func to create models
+create_lm_model <- function(country_name, country_data) {
+  lm_model <- lm(new_deaths ~ new_cases, data = country_data)
+  summary(lm_model)
+  
+  #plotting
+  ggplot(country_data, aes(x = new_cases, y = new_deaths)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(x = "New Cases", y = "New Deaths", title = paste("Linear Regression:", country_name, "New Cases vs New Deaths"))
+}
+
+us_model <- create_lm_model("US", us_new_cases)
+india_model <- create_lm_model("India", india_new_cases)
+brazil_model <- create_lm_model("Brazil", brazil_new_cases)
+
+```
+
+
+```{r}
+#lm function
+lm_func <- function(country_name, country_data) {
+  lm_model <- lm(new_deaths ~ new_cases, data = country_data)
+  
+  #plotting reg
+  plot <- ggplot(country_data, aes(x = new_cases, y = new_deaths)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(x = "New Cases", y = "New Deaths", title = paste("Linear Regression:", country_name, "New Cases vs New Deaths")) +
+    theme_minimal()
+  return(plot)} 
+
+#plots for each country
+us_plot <- lm_func("US", us_new_cases)
+india_plot <- lm_func("India", india_new_cases)
+brazil_plot <- lm_func("Brazil", brazil_new_cases)
+
+print(us_plot)
+print(india_plot)
+print(brazil_plot)
+```
+
+
+```{r }
+#lm function
+lm_func <- function(country_name, country_data) {
+  lm_model <- lm(new_deaths ~ new_cases, data = country_data)
+  lm_summary <- summary(lm_model)
+  
+  #formatting r^2
+  cat(paste("R^2 for", country_name, ":", lm_summary$r.squared, "\n"))
+  return(lm_summary)}
+
+#printing r^2's
+us_summary <- lm_func("US", us_new_cases)
+india_summary <- lm_func("India", india_new_cases)
+brazil_summary <- lm_func("Brazil", brazil_new_cases)
+
+```
+## Conclusion 
+##
+#### Between all three countries, we can see that India had the highest r^2 of the three countries. These are simple models, but overall, it's interesting to see the relationships between cases and deaths. It's also interesting to see the peaks and valleys for each each country. Possible causes may be relaxed distancing/containment practices, vaccination rates, or higher travel/gathering among people.
+
+#### It would be interesting if vaccination data or ages of the cases /deaths were in the dataset in order look at more complex health models, but either way, it's fairly clear to see from the data that Covid-19 affected countries differently and had distinct periods where it caused deaths at higher rates. Ideally, these causes can be furhter investigated and identified. 
+
+#### Thanks for reading!
+
+ 

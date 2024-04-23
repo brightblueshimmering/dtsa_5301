@@ -1,0 +1,252 @@
+---
+title: "NYC Shootings Analysis"
+author: "Tristan Osborn"
+date: "2024-04-22"
+output: html_document
+---
+
+## Data
+
+#### The data for this project is the NYPD Shooting Incident Data (Historic) dataset from data.gov published by The City of New York. Source:https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD
+
+#### According to the description, "This data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. Each record represents a shooting incident in NYC and includes information about the event, the location and time of occurrence. In addition, information related to suspect and victim demographics is also included. This data can be used by the public to explore the nature of shooting/criminal activity". The dates for the shootings range from 2006 to 2022.
+
+
+```{r libraries and data}
+#tidyverse and data
+library(tidyverse)
+library(dplyr)
+#reading in data
+df <- read_csv('https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD')
+```
+
+```{r}
+summary(df)
+```
+
+## Potential Bias
+
+#### There are multiple columns that can be may be valuable to analysis of the data, but I want to narrow it down to time based analysis and focus on the year, month, day of week, etc. This means I will only focus on Occur Date and Occur Time. Therefore, columns such as Sex, Race, and Borough may add bias to our models.
+
+
+```{r missing data check}
+# checking missing data
+sum(is.na(df$OCCUR_DATE))
+sum(is.na(df$OCCUR_TIME))
+```
+
+#### We can see that there aren't missing data in the fields we need, OCCUR_DATE & OCCUR_TIME.
+
+```{r transforming data}
+#formatting date/time
+df <- df %>%mutate(OCCUR_DATE = as.Date(OCCUR_DATE, format="%m/%d/%Y"),OCCUR_TIME = as.POSIXct(OCCUR_TIME,format="%H:%M"))
+#filtering data
+df <- df %>%
+  filter(OCCUR_DATE >= as.Date("2006-01-01") & OCCUR_DATE <= as.Date("2022-12-31"))
+#getting year, month, hour, and day of the week
+df <- df %>%mutate(YEAR = year(OCCUR_DATE), MONTH = month(OCCUR_DATE, label=TRUE),HOUR = hour(OCCUR_TIME),DAY_OF_WEEK = wday(OCCUR_DATE, label=TRUE, abbr=FALSE))
+```
+
+```{r calculating averages}
+#getting year, month, day, and hour averages
+yearly_avgs <- df %>% count(YEAR) %>% mutate(AVERAGE = n / 12)
+monthly_avgs <- df %>% count(MONTH) %>% mutate(AVERAGE = n / n_distinct(df$YEAR))
+hourly_avgs <- df %>% count(HOUR) %>% mutate(AVERAGE = n / (n_distinct(df$YEAR) * 365 * 24))
+daily_avgs <- df %>%count(DAY_OF_WEEK) %>% mutate(DAY_OF_WEEK = factor(DAY_OF_WEEK, levels=c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")), AVERAGE = n / (n_distinct(df$YEAR) * 52))
+```
+
+## Average Monthly Shootings by Year
+
+```{r yearly plot}
+#avg yearly shooting plot
+ggplot(yearly_avgs, aes(x = YEAR, y = AVERAGE)) + geom_col(fill = "lightblue") +
+  labs(title = "Average Monthly Shootings by Year", x = "Year", y = "Average Shootings per Month")
+```
+
+#### We can see that since 2006 average shootings per month in NYC have been slowly declining until 2020, when they increased back to the levels found in the mid 2000s. This could be r
+
+## Average Shootings by Month
+
+```{r monthly plot}
+#avg monthly shooting plot
+ggplot(monthly_avgs, aes(x = MONTH, y = AVERAGE)) + geom_col(fill = "green") +
+  labs(title = "Average Shootings by Month", x = "Month", y = "Average Shootings")
+```
+
+#### It appears that more shootings occur during the summer months and less during the winter. A possibility is that the cold weather means less people outside, therefore less chances of shooting/being shot.
+
+## Average Shootings by Day of the Week
+
+```{r daily plot}
+#avg daily shooting plot
+ggplot(daily_avgs, aes(x = DAY_OF_WEEK, y = AVERAGE)) +
+  geom_col(fill = "navy") + 
+  labs(title = "Average Shootings by Day of the Week", x = "Day of the Week", y = "Average Shootings")
+
+```
+
+#### Most shootings occur on weekends on average. Similar to the month, there may be more people out and about while off on the weekend and less of a chance as to be on either end of a shooting during the work week.
+
+## Average Shootings by Hour
+
+```{r hourly plot}
+#avg hourly shooting plot
+ggplot(hourly_avgs, aes(x = HOUR, y = AVERAGE)) + 
+  geom_col(color = "navy") + labs(title = "Average Shootings by Hour", x = "Hour", y = "Average Shootings")
+```
+
+#### Most shootings occur between around 6pm and 4am. The majority of shootings happen overnight. Potential reasons for this could be reduced visibility, or because there may be less crowded streets due to businesses closing. 
+
+# Models
+
+
+## Year
+
+### Linear Model
+
+```{r models - year}
+#linear
+lin_model_yearly <- lm(AVERAGE ~ YEAR, data = yearly_avgs)
+
+#quadratcic
+yearly_avgs <- yearly_avgs %>% mutate(year_squared = YEAR^2)
+quad_model_yearly <- lm(AVERAGE ~ YEAR + year_squared, data = yearly_avgs)
+
+# plot
+ggplot(yearly_avgs, aes(x = YEAR)) +
+  geom_col(aes(y = AVERAGE), fill = "lightblue") +
+  geom_line(aes(y = predict(lin_model_yearly)), color = "red", linewidth = 1.5) +
+  geom_line(aes(y = predict(quad_model_yearly)), color = "blue", linewidth = 1.5) +
+labs(title = "Linear and Quadratic Model - Yearly", x = "Year", y = "Average Shootings per Month")
+
+
+```
+```{r yearl avgs summary}
+#summary
+summary_linear_yearly <- summary(lin_model_yearly)
+summary_quadratic_yearly <- summary(quad_model_yearly)
+
+# Printing Monthly Model Adjusted R-squared values rounded to two decimal places
+cat("Yearly Linear Model Adjusted r^2:", round(summary_linear_yearly$adj.r.squared, 2), "\n")
+cat("Yearly Quadratic Model Adjusted r^2:", round(summary_quadratic_yearly$adj.r.squared, 2), "\n")
+```
+
+
+## Months
+
+```{r models -  month}
+#linear
+monthly_avgs$MONTH_NUM <- as.numeric(as.factor(monthly_avgs$MONTH))
+lin_model_month <- lm(AVERAGE ~ MONTH_NUM, data = monthly_avgs)
+
+#quadratic
+monthly_avgs <- monthly_avgs %>% mutate(month_squared = MONTH_NUM^2)
+quad_model_month <- lm(AVERAGE ~ MONTH_NUM + month_squared, data = monthly_avgs)
+
+#plotting models
+ggplot(monthly_avgs, aes(x = MONTH_NUM)) +
+  geom_col(aes(y = AVERAGE), fill = "green") +
+  geom_line(aes(y = predict(lin_model_month)), color = "red", linewidth = 1.5) +
+  geom_line(aes(y = predict(quad_model_month)), color = "blue", linewidth = 1.5) +
+  labs(title = "Linear and Quadratic Model - Monthly", x = "Month", y = "Average Shootings") +
+  scale_x_continuous(breaks = 1:12, labels = levels(as.factor(monthly_avgs$MONTH)))
+```
+
+```{r monthly models - r^2 comparison}
+#summary
+summary_linear_month <- summary(lin_model_month)
+summary_quadratic_month <- summary(quad_model_month)
+
+# Printing Monthly Model Adjusted R-squared values rounded to two decimal places
+cat("Monthly Linear Model Adjusted r^2:", round(summary_linear_month$adj.r.squared, 2), "\n")
+cat("Monthly Quadratic Model Adjusted r^2:", round(summary_quadratic_month$adj.r.squared, 2), "\n")
+```
+
+```{r models - day of week}
+#linear
+daily_avgs$DAY_NUM <- as.numeric(as.factor(daily_avgs$DAY_OF_WEEK))
+lin_model_daily <- lm(AVERAGE ~ DAY_NUM, data = daily_avgs)
+
+#quadratic
+daily_avgs <- daily_avgs %>% mutate(day_squared = DAY_NUM^2)
+quad_model_daily <- lm(AVERAGE ~ DAY_NUM + day_squared, data = daily_avgs)
+
+#plot
+ggplot(daily_avgs, aes(x = DAY_NUM)) +
+  geom_col(aes(y = AVERAGE), fill = "navy") +
+  geom_line(aes(y = predict(lin_model_daily)), color = "red", linewidth = 1.5) +
+  geom_line(aes(y = predict(quad_model_daily)), color = "blue", linewidth = 1.5) +
+  labs(title = "Linear and Quadratic Model - Daily", x = "Day of the Week", y = "Average Shootings") +
+  scale_x_continuous(breaks = 1:7, labels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+```
+
+```{r}
+#summaries
+summary_linear_daily <- summary(lin_model_daily)
+summary_quadratic_daily <- summary(quad_model_daily)
+
+#printing
+cat("Daily Linear Model Adjusted r^2:", round(summary_linear_daily$adj.r.squared, 2), "\n")
+cat("Daily Quadratic Model Adjusted r^2:", round(summary_quadratic_daily$adj.r.squared, 2), "\n")
+
+```
+
+
+
+
+```{r hourly models}
+#linear
+lin_model_hourly <- lm(AVERAGE ~ HOUR, data = hourly_avgs)
+
+#quad
+hourly_avgs <- hourly_avgs %>% mutate(hour_squared = HOUR^2)
+quad_model_hourly <- lm(AVERAGE ~ HOUR + hour_squared, data = hourly_avgs)
+
+#plot
+ggplot(hourly_avgs, aes(x = HOUR)) +
+  geom_col(aes(y = AVERAGE), color = "navy") + 
+  geom_line(aes(y = predict(lin_model_hourly)), color = "red", linewidth = 1.5) +
+  geom_line(aes(y = predict(quad_model_hourly)), color = "blue", linewidth = 1.5) +
+  labs(title = "Linear and Quadratic Model - Hourly", x = "Hour", y = "Average Shootings") +
+  scale_x_continuous(breaks = seq(0, 23, by = 1), labels = as.integer(seq(0, 23, by = 1)))
+
+```
+```{r}
+#summaries
+summary_linear_hourly <- summary(lin_model_hourly)
+summary_quadratic_hourly <- summary(quad_model_hourly)
+#printingr2
+cat("Hourly Linear Model Adjusted r^2:", round(summary_linear_hourly$adj.r.squared, 2), "\n")
+cat("Hourly Quadratic Model Adjusted r^2:", round(summary_quadratic_hourly$adj.r.squared, 2), "\n")
+
+```
+## Conclusion
+
+#### We can tell from the graphs and comparing the adjusted r^2 that quadratic regression is performing much better than linear. This was fairly expected as there is a parabolic-y shape in both monthly and yearly results. 
+
+
+#### Overall, we can tell that time is an important factor to shootings in NYC. Trends show that on average: summers, weekends, and overnights are the most likely for a shooting to occur. Just for fun:  
+
+
+```{r predictions}
+#getting predictions
+quad_preds_month <- predict(quad_model_month, monthly_avgs)
+quad_preds_daily <- predict(quad_model_daily, daily_avgs)
+quad_preds_hourly <- predict(quad_model_hourly, hourly_avgs)
+
+#getting max values
+max_month_quad <- monthly_avgs %>% arrange(desc(quad_preds_month)) %>% slice(1) %>% pull(MONTH)
+max_day_quad <- daily_avgs %>% arrange(desc(quad_preds_daily)) %>% slice(1) %>% pull(DAY_OF_WEEK)
+max_hour_quad <- hourly_avgs %>% arrange(desc(quad_preds_hourly)) %>% slice(1) %>% pull(HOUR)
+
+#printing results
+cat(" month: ", max_month_quad, "\n", 
+    "day of the week: ", max_day_quad, "\n",
+    "hour of day: ", max_hour_quad, "\n")
+```
+
+
+#### We can see that according to Quadratic models, the single highest chance of a shooting occuring is a Sunday in July around 11pm. 
+
+#### Thanks for reading! 
